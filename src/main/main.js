@@ -35,6 +35,7 @@ function overlay(name, w, h) {
   const win = new BrowserWindow({
     width: w, height: h, show: false, transparent: true, frame: false, alwaysOnTop: true, skipTaskbar: true,
     resizable: false, hasShadow: false, focusable: focusable(), title: `MeetInter ${name}`,
+    type: process.platform === 'win32' ? 'toolbar' : undefined, // WS_EX_TOOLWINDOW keeps overlays out of Alt+Tab
     webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   win.setAlwaysOnTop(true, 'screen-saver');
@@ -51,14 +52,14 @@ function reveal(win) {
   setTimeout(() => win.setOpacity(1), 30);
 }
 
-function createDashboard(hash = '#/sessions') {
+function createDashboard(hash = '#/sessions', visible = true) {
   const win = new BrowserWindow({
     width: 1050, height: 700, minWidth: 800, minHeight: 600, show: false, backgroundColor: '#111114',
     autoHideMenuBar: true, title: 'MeetInter',
     webPreferences: { preload: path.join(ROOT, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   win.loadFile(page('dashboard'), { hash: hash.replace(/^#/, '') });
-  win.once('ready-to-show', () => win.show());
+  if (visible) win.once('ready-to-show', () => win.show());
   win.on('close', (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });
   wins.dashboard = win;
 }
@@ -113,6 +114,7 @@ function applyWindows(state) {
       w.setContentProtection(settings.invisible || ui.isCapturingScreenshot);
     }
     for (const n of ['control', 'chat', 'notify']) wins[n].setFocusable(focusable());
+    if (!wins.dashboard.isDestroyed()) wins.dashboard.setSkipTaskbar(settings.invisible);
   }
   const want = {
     chat: ui.showChat,
@@ -188,6 +190,7 @@ function trayIcon() {
 
 function buildTray() {
   const { state } = store;
+  if (state.settings.invisible) { tray?.destroy(); tray = null; return; }
   tray ??= new Tray(trayIcon());
   tray.setToolTip('MeetInter');
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -455,7 +458,7 @@ app.whenReady().then(() => {
   wins.notify.setPosition(wa.x + wa.width - 376, wa.y + 16);
   resetPosition();
   createAudio();
-  createDashboard();
+  createDashboard('#/sessions', !store.state.settings.invisible);
 
   calendar = startCalendar({
     getUrl: () => store.state.settings.icsUrl,
