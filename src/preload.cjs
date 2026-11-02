@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const methods = [
   'getState', 'patchSettings', 'patchUi', 'startSession', 'endSession', 'ask', 'clearChat', 'notchHover',
   'resizeChat', 'addSegment', 'openDashboard', 'openExternal', 'copy',
+  'pickerSources', 'pickerChoose', 'videoStart', 'videoChunk', 'videoEnd',
   'listSessions', 'getSession', 'updateSession', 'deleteSession', 'reanalyze', 'followUpEmail', 'askSession', 'askPast',
   'saveMode', 'deleteMode', 'addModeFile',
 ];
