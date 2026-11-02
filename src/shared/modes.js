@@ -50,7 +50,7 @@ export const BUILTIN_MODES = [
   },
   {
     id: 'work', name: 'Looking for work',
-    chatPrompt: 'I am a candidate interviewing for a position. Help me answer questions during the interview. If there is code, include line-by-line comments. If a behavioral question involves an example, respond with one specific example story.',
+    chatPrompt: 'I am a candidate interviewing for a position. Help me answer questions during the interview. If there is code, keep it short with brief comments. If a behavioral question needs an example, give one specific example in two or three sentences.',
     summarySections: [
       sec('Follow-up actions', 'Everything I should do after the interview (thank-you note, send documents, deadlines).'),
       sec('Overview', 'Concise overview of the interview and its tone.'),
@@ -74,12 +74,12 @@ export const BUILTIN_MODES = [
 export const QUICK_ACTIONS = {
   assist: {
     label: 'Assister',
-    prompt: 'Based on what\'s on my screen, infer and provide me with the best information to help me at the current moment.',
-    sessionPrompt: "I'm (the user) in the middle of a conversation, and I'm asking you for help without specifically prompting you.",
+    prompt: 'Based on what\'s on my screen, give me the one thing that helps me most right now.',
+    sessionPrompt: "I'm in the middle of the conversation and need a quick nudge: answer the latest question or point in the transcript, the way I could say it.",
   },
-  say: { label: 'Que dire ?', prompt: 'What should I say next? Output only the words I should say.' },
-  followup: { label: 'Questions de suivi', prompt: 'Suggest two follow-up questions I could ask. Output as two bullet points.' },
-  recap: { label: 'Récap', prompt: 'Recap the most recent thing that happened in the conversation.' },
+  say: { label: 'Que dire ?', prompt: 'What should I say next? Output only the words I should say, one or two natural sentences.' },
+  followup: { label: 'Questions de suivi', prompt: 'Suggest two short follow-up questions I could ask. Output as two bullet points.' },
+  recap: { label: 'Récap', prompt: 'Recap the most recent thing that happened in the conversation in one or two sentences.' },
 };
 
 export const LANGUAGES = [
@@ -89,13 +89,11 @@ export const LANGUAGES = [
 
 export const DEFAULT_SHORTCUTS = {
   toggleVisibility: 'Ctrl+\\', ask: 'Ctrl+Enter', clear: 'Ctrl+R', toggleSession: 'Ctrl+Alt+\\', // Electron cannot register Ctrl+Shift+\ on Windows (Cluely's default)
-  moveUp: 'Ctrl+Up', moveDown: 'Ctrl+Down', moveLeft: 'Ctrl+Left', moveRight: 'Ctrl+Right',
   scrollUp: 'Ctrl+Shift+Up', scrollDown: 'Ctrl+Shift+Down',
 };
 
 export const SHORTCUT_LABELS = {
   toggleVisibility: 'Afficher / masquer', ask: 'Demander / Assister', clear: 'Effacer et replier',
-  toggleSession: 'Démarrer / arrêter la session', moveUp: 'Déplacer vers le haut', moveDown: 'Déplacer vers le bas',
-  moveLeft: 'Déplacer vers la gauche', moveRight: 'Déplacer vers la droite',
+  toggleSession: 'Démarrer / arrêter la session',
   scrollUp: 'Défiler la réponse vers le haut', scrollDown: 'Défiler la réponse vers le bas',
 };

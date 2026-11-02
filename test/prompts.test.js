@@ -26,6 +26,7 @@ test('chat prompt carries mode prompt, reference files, transcript, language and
   assert.match(system, /\[00:05\] Eux: Parlez-moi de vous\./);
   assert.match(system, /entire answer in Français/);
   assert.match(system, /screenshot/);
+  assert.match(system, /No em dashes/);
   assert.deepEqual(messages.map((x) => x.role), ['user', 'assistant', 'user']);
   assert.equal(messages.at(-1).content, 'What should I say next?');
 });

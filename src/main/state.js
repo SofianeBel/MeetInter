@@ -4,10 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { BUILTIN_MODES, DEFAULT_SHORTCUTS } from '../shared/modes.js';
 
 export const DEFAULT_SETTINGS = {
-  ai: { provider: 'anthropic', model: 'claude-sonnet-5-5', smartModel: 'claude-opus-5-5', apiKey: '', baseUrl: '' },
+  ai: { provider: 'anthropic', model: 'claude-haiku-5-5', smartModel: 'claude-opus-5-5', apiKey: '', baseUrl: '' },
   stt: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'whisper-1', language: 'auto' },
   outputLanguage: 'fr', invisible: true, noFocusWhenInvisible: false, hideChatHidesControl: true,
-  screenUse: 'required', smartMode: false, ambient: false, openAtLogin: false, icsUrl: '', activeModeId: 'general',
+  screenUse: 'required', smartMode: false, ambient: false, openAtLogin: false, icsUrl: '', activeModeId: 'general', recordVideo: false,
   shortcuts: DEFAULT_SHORTCUTS,
 };
 
@@ -90,9 +90,9 @@ export function createStore(dir) {
       commit(true);
     },
 
-    startSession() {
+    startSession(recordVideo = false) {
       advance(state.session ? 'live' : 'idle', 'live');
-      state.session = { id: randomUUID(), modeId: state.settings.activeModeId, startedAt: Date.now(), transcript: [], messages: [] };
+      state.session = { id: randomUUID(), modeId: state.settings.activeModeId, startedAt: Date.now(), recordVideo, transcript: [], messages: [] };
       state.ui.upcomingMeeting = null;
       commit(false);
       return state.session;
@@ -131,7 +131,10 @@ export function createStore(dir) {
 
     saveSession: (s) => fs.writeFileSync(sessionFile(s.id), JSON.stringify(s)),
     loadSession: (id) => readJson(sessionFile(id), null),
-    deleteSession: (id) => fs.rmSync(sessionFile(id), { force: true }),
+    deleteSession(id) {
+      fs.rmSync(sessionFile(id), { force: true });
+      fs.rmSync(path.join(dir, 'recordings', `${path.basename(id)}.webm`), { force: true });
+    },
     allSessions: () =>
       fs.readdirSync(path.join(dir, 'sessions')).filter((f) => f.endsWith('.json'))
         .map((f) => readJson(path.join(dir, 'sessions', f), null)).filter(Boolean)

@@ -15,21 +15,11 @@ const render = (s) => {
 ask.onclick = () => api.patchUi({ showChat: !state.ui.showChat });
 rec.onclick = () => (state.session ? api.endSession() : api.startSession());
 
-let drag = null;
-logo.onpointerdown = (e) => {
-  logo.setPointerCapture(e.pointerId);
-  drag = { dx: e.screenX - window.screenX, dy: e.screenY - window.screenY, sx: e.screenX, sy: e.screenY, moved: false };
-};
-logo.onpointermove = (e) => {
-  if (!drag) return;
-  if (Math.hypot(e.screenX - drag.sx, e.screenY - drag.sy) > 4) drag.moved = true;
-  if (drag.moved) api.dragControl({ x: e.screenX - drag.dx, y: e.screenY - drag.dy });
-};
-logo.onpointerup = () => {
-  if (drag && !drag.moved) api.openDashboard();
-  drag = null;
-};
-logo.ondblclick = () => api.resetPosition();
+logo.onclick = () => api.openDashboard();
+// window ignores the mouse outside the notch; take clicks only while hovered
+const notch = $('#notch');
+notch.onmouseenter = () => api.notchHover(true);
+notch.onmouseleave = () => api.notchHover(false);
 
 api.onState(render);
 api.getState().then(render);

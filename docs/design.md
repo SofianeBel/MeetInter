@@ -22,20 +22,22 @@ Settings = {
   ai: { provider: 'anthropic'|'openai'|'claude-cli'|'codex-cli', model, smartModel, apiKey, baseUrl },
   stt: { baseUrl, apiKey, model, language },   // endpoint OpenAI-compatible /audio/transcriptions
   outputLanguage, invisible, noFocusWhenInvisible, hideChatHidesControl,
-  screenUse: 'off'|'required', smartMode, ambient, openAtLogin, icsUrl, activeModeId,
-  shortcuts: { toggleVisibility, ask, clear, toggleSession, moveUp, moveDown, moveLeft, moveRight, scrollUp, scrollDown },
+  screenUse: 'off'|'required', smartMode, ambient, openAtLogin, icsUrl, activeModeId, recordVideo,
+  shortcuts: { toggleVisibility, ask, clear, toggleSession, scrollUp, scrollDown },
 }
 Mode = { id, name, builtin, chatPrompt, summarySections: {title, prompt}[], files: {name, text}[] }
 Segment = { id, at, relativeMs, role: 'me'|'them', text, status: 'transcribing'|'ready' }
 Message = { id, role: 'user'|'assistant', text, display?, screenshot?: boolean }
-LiveSession = { id, modeId, startedAt, transcript: Segment[], messages: Message[] }
+LiveSession = { id, modeId, startedAt, recordVideo: boolean, transcript: Segment[], messages: Message[] }
 SavedSession = LiveSession & { endedAt, title, notes, summary: string|null, followUpEmail: {subject, body}|null,
-                               status: 'summarizing'|'done'|'error', error?: string }
+                               status: 'summarizing'|'done'|'error', error?: string,
+                               video: { file, offsetMs }|null }   // offsetMs = début réel de l'enregistrement - startedAt
 ```
 
 Raccourci démarrer/arrêter par défaut : `Ctrl+Alt+\` (Electron refuse `Ctrl+Shift+\` sur cette machine).
 
-Persistance : `userData/settings.json`, `userData/modes.json` (perso seulement), `userData/sessions/<id>.json`.
+Persistance : `userData/settings.json`, `userData/modes.json` (perso seulement), `userData/sessions/<id>.json`,
+`userData/recordings/<id>.webm` (supprimée avec la session, pas de purge automatique).
 
 ## Cycle de vie d'une session (machine à états)
 
@@ -47,11 +49,12 @@ dans le dashboard. Inactivité : 10 min sans nouveau segment ni message → band
 
 | Fenêtre | Rôle |
 |---|---|
-| control | pilule 163×50 : logo/drag, bouton Ask/Hide, start/stop session |
+| control | notch noir fixé en haut au centre de l'écran principal : compact (point de voix + start/stop), s'élargit au survol pour montrer Ask/Hide ; clic logo → dashboard. Zone transparente traversable (`setIgnoreMouseEvents`) |
 | chat | 540 px sous la pilule : transcript live repliable, réponses Markdown, actions rapides, input |
 | dashboard | sessions (liste + recherche), détail session, modes, réglages, chat « passé » |
 | notify | réunion imminente (ICS) avec bouton Démarrer |
-| audio (cachée) | capture micro + loopback système, VAD, envoi des segments |
+| picker | créée à la demande quand `recordVideo` est actif : fenêtres ouvertes (vignette + titre, celles de MeetInter exclues) ; annuler = session sans vidéo |
+| audio (cachée) | capture micro + loopback système, VAD, envoi des segments ; enregistrement vidéo de la fenêtre choisie |
 
 Toutes les fenêtres sauf dashboard : transparent, frameless, alwaysOnTop (niveau `screen-saver`), skipTaskbar.
 `setContentProtection(settings.invisible || ui.isCapturingScreenshot)` sur toutes.
@@ -63,11 +66,14 @@ Focusable = `!(invisible && noFocusWhenInvisible)`.
 - `api.patchSettings(partial)`, `api.patchUi(partial)`.
 - `api.startSession()`, `api.endSession()`.
 - `api.ask({ text?, display?, quick?: 'assist'|'say'|'followup'|'recap' })` → streame via `api.onChatDelta(cb({messageId, delta, done, error}))`.
-- `api.clearChat()`, `api.dragControl({x,y})`, `api.resetPosition()`, `api.resizeChat(height)`.
+- `api.clearChat()`, `api.notchHover(bool)`, `api.resizeChat(height)`.
 - `api.addSegment(role, wavBase64, at)` (fenêtre audio) ; main transcrit et met à jour l'état.
+- Vidéo (fenêtre audio) : `api.videoStart(at)`, `api.videoChunk(Uint8Array)` (ajouté au fichier), `api.videoEnd()`.
+- Sélecteur : `api.pickerSources()` → `{id, name, thumbnail}[]`, `api.pickerChoose({id, name}|null)`.
 - Dashboard : `api.listSessions(query)`, `api.getSession(id)`, `api.updateSession(id, {notes, title})`,
   `api.deleteSession(id)`, `api.reanalyze(id)`, `api.followUpEmail(id)`, `api.askSession(id, text)`,
   `api.askPast(text)`, `api.saveMode(mode)`, `api.deleteMode(id)`, `api.addModeFile(id)`.
+- Lecture : protocole `rec://v/<fichier>` (fichiers de `userData/recordings/` seulement, requêtes Range).
 - Événements main → renderer : `chat-focus-input`, `chat-blur-input`, `chat-scroll {deltaY}`, `chat-submit`.
 
 ## IA
@@ -89,6 +95,15 @@ appelle `getDisplayMedia` (son « eux ») et `getUserMedia` (micro « moi »). L
 segmenteur pur `src/shared/vad.js` : RMS sur trames de 30 ms à 16 kHz, hystérésis, pré-roll 300 ms,
 fin après 600 ms de silence, segment forcé à 20 s, minimum 400 ms de parole. Micro rendu muet pendant que
 « eux » parlent (anti-écho, comme Cluely). Segment → WAV 16 kHz mono base64 → main → STT.
+
+## Vidéo
+
+`recordVideo` actif : le handler renvoie la fenêtre choisie au lieu de l'écran 0, la piste vidéo est gardée
+(1280×720 max, 60 i/s). Micro + loopback sont mixés dans un `AudioContext` à part (le chemin VAD ne change pas).
+`MediaRecorder` WebM VP9 (sinon VP8) + Opus, 4 Mbit/s, image clé toutes les 2 s, morceaux de 3 s ajoutés au
+fichier par le main. Fenêtre fermée en cours de route → l'enregistrement s'arrête, la session continue.
+À l'arrêt, `src/main/webm.js` réécrit le fichier avec durée, SeekHead et Cues (le WebM de MediaRecorder n'en a
+pas, sinon pas de barre de lecture utilisable). Alignement : `src/shared/recap.js` (`videoTime`, `segmentAt`).
 
 ## Calendrier
 
