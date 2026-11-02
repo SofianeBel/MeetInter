@@ -76,6 +76,7 @@ async function viewSession(id) {
     ask: `<form id="askForm" class="bar"><input id="aq" placeholder="Poser une question sur cette réunion…"><button class="primary">Demander</button></form><div id="aa" class="md selectable"></div>`,
   };
   const labels = { summary: 'Résumé', transcript: 'Transcript', notes: 'Notes', email: 'E-mail de suivi', ask: 'Poser une question' };
+  const old = $('#vid'), keep = old?.dataset.id === id && { t: old.currentTime, playing: !old.paused };
   main.innerHTML = `<input class="title-in" id="title" value="${esc(s.title)}">
     <div class="muted">${fmtDate(s.startedAt)} · ${mmss((s.endedAt ?? s.startedAt) - s.startedAt)} · ${esc(mode?.name ?? 'Mode supprimé')} ${badge(s.status)}</div>
     <div class="tabs">${Object.entries(labels).map(([k, v]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${v}</button>`).join('')}</div>
@@ -97,6 +98,8 @@ async function viewSession(id) {
     location.hash = '#/sessions';
   };
   if ($('#vid')) wireRecap(s);
+  // a re-render of the same session (summary landing, title edit) must not reset playback
+  if (keep && $('#vid')) $('#vid').addEventListener('loadedmetadata', (e) => { e.target.currentTime = keep.t; if (keep.playing) e.target.play(); }, { once: true });
   if ($('#notes')) $('#notes').onchange = (e) => api.updateSession(id, { notes: e.target.value });
   if ($('#gen')) $('#gen').onclick = async () => {
     $('#email').textContent = 'Rédaction…';
@@ -113,7 +116,7 @@ async function viewSession(id) {
 
 const transcriptText = (s) => s.transcript.filter((t) => t.text).map((t) => `[${mmss(t.relativeMs)}] ${t.role === 'me' ? 'Moi' : 'Eux'} : ${t.text}`).join('\n');
 const spoken = (s) => s.transcript.filter((t) => t.text);
-const recapHtml = (s) => `<div class="recap"><video id="vid" controls preload="metadata" src="rec://v/${encodeURIComponent(s.video.file)}"></video>
+const recapHtml = (s) => `<div class="recap"><video id="vid" data-id="${s.id}" controls preload="metadata" src="rec://v/${encodeURIComponent(s.video.file)}"></video>
   <div id="lines" class="lines selectable">${spoken(s).map((t, i) => `<button class="line" data-i="${i}"><span class="muted">${mmss(videoTime(t, s.video.offsetMs))}</span>
     <span><b class="${t.role}">${t.role === 'me' ? 'Moi' : 'Eux'}</b> ${esc(t.text)}</span></button>`).join('') || '<p class="muted">Transcript vide.</p>'}</div></div>`;
 function wireRecap(s) {
