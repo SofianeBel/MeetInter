@@ -12,7 +12,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 
 const ROOT = path.join(import.meta.dirname, '..');
 const page = (name) => path.join(ROOT, 'renderer', `${name}.html`);
-const CONTROL = { w: 163, h: 50 };
+const CONTROL = { w: 236, h: 34 }; // expanded notch + its two 10px shoulders
 const CHAT_W = 540;
 
 let store, tray, calendar;
@@ -82,10 +82,11 @@ function createAudio() {
 
 const workArea = () => screen.getDisplayNearestPoint({ x: controlPos.x, y: controlPos.y }).workArea;
 
-function placeControl(x, y) {
-  const wa = workArea();
-  controlPos.x = Math.round(Math.min(Math.max(x, wa.x), wa.x + wa.width - CONTROL.w));
-  controlPos.y = Math.round(Math.min(Math.max(y, wa.y), wa.y + wa.height - CONTROL.h));
+// the notch sits flush with the top edge of the primary display, centred
+function placeControl() {
+  const b = screen.getPrimaryDisplay().bounds;
+  controlPos.x = Math.round(b.x + (b.width - CONTROL.w) / 2);
+  controlPos.y = b.y;
   wins.control.setPosition(controlPos.x, controlPos.y);
   placeChat();
 }
@@ -96,11 +97,6 @@ function placeChat() {
   const y = controlPos.y + CONTROL.h + 6;
   const h = Math.min(chatHeight, Math.max(100, wa.y + wa.height - y - 8));
   wins.chat.setBounds({ x: Math.round(x), y: Math.round(y), width: CHAT_W, height: Math.round(h) });
-}
-
-function resetPosition() {
-  const wa = screen.getPrimaryDisplay().workArea;
-  placeControl(wa.x + (wa.width - CONTROL.w) / 2, wa.y + 25);
 }
 
 let lastFlags = '';
@@ -158,10 +154,6 @@ const actions = {
   },
   clear() { store.clearMessages(); },
   toggleSession() { return store.state.session ? endSession() : startSession(); },
-  moveUp: () => placeControl(controlPos.x, controlPos.y - 80),
-  moveDown: () => placeControl(controlPos.x, controlPos.y + 80),
-  moveLeft: () => placeControl(controlPos.x - 80, controlPos.y),
-  moveRight: () => placeControl(controlPos.x + 80, controlPos.y),
   scrollUp: () => send('chat', 'chat-scroll', { deltaY: -240 }),
   scrollDown: () => send('chat', 'chat-scroll', { deltaY: 240 }),
 };
@@ -378,8 +370,7 @@ const handlers = {
   endSession: () => endSession(),
   ask,
   clearChat: () => actions.clear(),
-  dragControl: ({ x, y }) => placeControl(x, y),
-  resetPosition,
+  notchHover: (on) => wins.control.setIgnoreMouseEvents(!on, { forward: true }),
   resizeChat: (h) => { chatHeight = Math.max(100, Math.round(h)); placeChat(); },
   addSegment,
   openDashboard: (hash) => openDashboard(hash),
@@ -456,7 +447,9 @@ app.whenReady().then(() => {
   overlay('notify', 360, 300);
   const wa = screen.getPrimaryDisplay().workArea;
   wins.notify.setPosition(wa.x + wa.width - 376, wa.y + 16);
-  resetPosition();
+  wins.control.setIgnoreMouseEvents(true, { forward: true }); // transparent area around the compact notch stays click-through
+  placeControl();
+  screen.on('display-metrics-changed', placeControl);
   createAudio();
   createDashboard('#/sessions', !store.state.settings.invisible);
 

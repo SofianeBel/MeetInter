@@ -23,7 +23,7 @@ Settings = {
   stt: { baseUrl, apiKey, model, language },   // endpoint OpenAI-compatible /audio/transcriptions
   outputLanguage, invisible, noFocusWhenInvisible, hideChatHidesControl,
   screenUse: 'off'|'required', smartMode, ambient, openAtLogin, icsUrl, activeModeId,
-  shortcuts: { toggleVisibility, ask, clear, toggleSession, moveUp, moveDown, moveLeft, moveRight, scrollUp, scrollDown },
+  shortcuts: { toggleVisibility, ask, clear, toggleSession, scrollUp, scrollDown },
 }
 Mode = { id, name, builtin, chatPrompt, summarySections: {title, prompt}[], files: {name, text}[] }
 Segment = { id, at, relativeMs, role: 'me'|'them', text, status: 'transcribing'|'ready' }
@@ -47,7 +47,7 @@ dans le dashboard. Inactivité : 10 min sans nouveau segment ni message → band
 
 | Fenêtre | Rôle |
 |---|---|
-| control | pilule 163×50 : logo/drag, bouton Ask/Hide, start/stop session |
+| control | notch noir fixé en haut au centre de l'écran principal : compact (point de voix + start/stop), s'élargit au survol pour montrer Ask/Hide ; clic logo → dashboard. Zone transparente traversable (`setIgnoreMouseEvents`) |
 | chat | 540 px sous la pilule : transcript live repliable, réponses Markdown, actions rapides, input |
 | dashboard | sessions (liste + recherche), détail session, modes, réglages, chat « passé » |
 | notify | réunion imminente (ICS) avec bouton Démarrer |
@@ -63,7 +63,7 @@ Focusable = `!(invisible && noFocusWhenInvisible)`.
 - `api.patchSettings(partial)`, `api.patchUi(partial)`.
 - `api.startSession()`, `api.endSession()`.
 - `api.ask({ text?, display?, quick?: 'assist'|'say'|'followup'|'recap' })` → streame via `api.onChatDelta(cb({messageId, delta, done, error}))`.
-- `api.clearChat()`, `api.dragControl({x,y})`, `api.resetPosition()`, `api.resizeChat(height)`.
+- `api.clearChat()`, `api.notchHover(bool)`, `api.resizeChat(height)`.
 - `api.addSegment(role, wavBase64, at)` (fenêtre audio) ; main transcrit et met à jour l'état.
 - Dashboard : `api.listSessions(query)`, `api.getSession(id)`, `api.updateSession(id, {notes, title})`,
   `api.deleteSession(id)`, `api.reanalyze(id)`, `api.followUpEmail(id)`, `api.askSession(id, text)`,

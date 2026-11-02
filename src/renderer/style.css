@@ -17,15 +17,22 @@ input:focus, select:focus, textarea:focus { border-color: rgba(255, 255, 255, 0.
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
 
-/* control pill */
-#pill { width: 163px; height: 50px; border-radius: 25px; background: var(--panel); border: 1px solid var(--line); display: flex; align-items: center; gap: 4px; padding: 0 8px; }
-#logo { width: 32px; height: 32px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line); cursor: grab; flex: none; display: grid; place-items: center; }
+/* control notch: pure black like the bezel, flush with the top edge, concave shoulders */
+#notch { position: relative; width: 112px; height: 34px; margin: 0 auto; background: #000; border-radius: 0 0 14px 14px; display: flex; align-items: center; gap: 4px; padding: 0 8px; transition: width 0.18s cubic-bezier(0.2, 0, 0, 1); }
+#notch::before, #notch::after { content: ''; position: absolute; top: 0; width: 10px; height: 10px; }
+#notch::before { left: -10px; background: radial-gradient(circle at 0 100%, transparent 10px, #000 10.5px); }
+#notch::after { right: -10px; background: radial-gradient(circle at 100% 100%, transparent 10px, #000 10.5px); }
+#notch:hover { width: 216px; }
+#logo { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; flex: none; display: grid; place-items: center; }
+#logo:hover { background: var(--panel-2); }
 #logo .dot { width: 8px; height: 8px; border-radius: 50%; background: transparent; }
 #logo.me .dot { background: #fff; animation: pulse 0.8s infinite; }
 #logo.them .dot { background: var(--ok); animation: pulse 0.8s infinite; }
 @keyframes pulse { 50% { opacity: 0.3; } }
-#ask { flex: 1; border-radius: 16px; padding: 6px 4px; white-space: nowrap; font-size: 13px; }
-#rec { width: 32px; height: 32px; border-radius: 50%; padding: 0; flex: none; color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { #notch, #ask { transition: none; } }
+#ask { flex: 1; min-width: 0; overflow: hidden; border-radius: 12px; padding: 4px; white-space: nowrap; font-size: 12.5px; opacity: 0; transition: opacity 0.12s; }
+#notch:hover #ask { opacity: 1; }
+#rec { width: 24px; height: 24px; border-radius: 50%; padding: 0; flex: none; font-size: 11px; line-height: 1; color: var(--danger); }
 #rec.live { background: var(--danger); color: #fff; }
 
 /* chat panel */

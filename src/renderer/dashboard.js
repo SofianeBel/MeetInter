@@ -223,7 +223,7 @@ function viewSettings() {
     ${row('Adresse iCal secrète (.ics)', input('icsUrl', 'text', 'placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"'))}
     <h3>Raccourcis globaux</h3>
     ${Object.entries(SHORTCUT_LABELS).map(([k, l]) => row(l, `<input data-sc="${k}" readonly value="${esc(state.settings.shortcuts[k] ?? '')}" placeholder="Clique puis appuie sur la combinaison">`)).join('')}
-    <div class="actions" style="margin-top:12px"><button id="rst-sc">Raccourcis par défaut</button><button id="rst-pos">Replacer la pilule</button></div>`;
+    <div class="actions" style="margin-top:12px"><button id="rst-sc">Raccourcis par défaut</button></div>`;
 
   main.onchange = (e) => {
     const el = e.target.closest('[data-path]');
@@ -247,7 +247,6 @@ function viewSettings() {
     };
   });
   $('#rst-sc').onclick = async () => { await api.patchSettings({ shortcuts: DEFAULT_SHORTCUTS }); viewSettings(); };
-  $('#rst-pos').onclick = () => api.resetPosition();
 }
 
 // ---------- boot ----------
