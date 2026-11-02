@@ -28,10 +28,14 @@ const join = (...parts) => parts.filter(Boolean).join('\n\n');
 // Condensed rules of the unslop skill, so answers don't read as AI-written.
 const STYLE = 'Write like a person, not a chatbot. Plain words, active voice, one idea per sentence. No em dashes, no filler ("it is important to note", "in order to"), no hedging, no "not just X but Y", no forced lists of three, no AI words (delve, crucial, pivotal, showcase, leverage, enhance, additionally). No "Great question", "Certainly", "I hope this helps". No emojis, no bold for emphasis. Give the concrete fact, name or number instead of a vague claim.';
 
-export function buildChatPrompt({ mode, transcript, history, text, outputLanguage, hasScreenshot }) {
+const screenshotsLine = (n) =>
+  n === 1 ? "A screenshot of the user's screen is attached to the last message."
+    : n > 1 && `${n} screenshots of the user's screen are attached to the last message, one per second, oldest first. The last one is the screen right now, so you can tell what just changed.`;
+
+export function buildChatPrompt({ mode, transcript, history, text, outputLanguage, screenshots = 0 }) {
   const system = join(
     'You are MeetInter, a real-time assistant that helps the user during a live meeting or interview. The user glances at your answer while still talking, so answer like a colleague whispering a quick tip: 1 to 3 short sentences in plain spoken words. No headings, no intro, no recap of the question, no caveats. A short bullet list only when listing is the point. Longer only if the user explicitly asks for detail or code.',
-    hasScreenshot && "A screenshot of the user's screen is attached to the last message.",
+    screenshotsLine(screenshots),
     mode?.chatPrompt,
     filesBlock(mode),
     transcript.length
@@ -98,7 +102,8 @@ export function parseFollowUp(text) {
 
 // ---------- providers ----------
 
-const withImage = (messages, imagePng) => imagePng ? messages.map((m, i) => i === messages.length - 1 ? { ...m, image: imagePng } : m) : messages;
+const withImages = (messages, images) => messages.map((m, i) => i === messages.length - 1 ? { ...m, images } : { ...m, images: [] });
+const anthropicImage = (png) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } });
 
 const dialog = (messages) =>
   messages.length === 1 ? messages[0].content
@@ -119,24 +124,24 @@ function run(cmd, args, input, onOut) {
   });
 }
 
-const withTempFile = async (data, ext, fn) => {
-  if (!data) return fn(null);
-  const file = path.join(os.tmpdir(), `meetinter-${randomUUID()}.${ext}`);
-  fs.writeFileSync(file, data);
-  try { return await fn(file); } finally { fs.rmSync(file, { force: true }); }
+const withTempFiles = async (list, ext, fn) => {
+  const files = list.map((data) => {
+    const file = path.join(os.tmpdir(), `meetinter-${randomUUID()}.${ext}`);
+    fs.writeFileSync(file, data);
+    return file;
+  });
+  try { return await fn(files); } finally { for (const f of files) fs.rmSync(f, { force: true }); }
 };
 
 export const providers = {
-  async anthropic({ ai, system, messages, imagePng, smart, onDelta }) {
+  async anthropic({ ai, system, messages, images = [], smart, onDelta }) {
     const client = new Anthropic({ apiKey: ai.apiKey || undefined, baseURL: ai.baseUrl || undefined });
-    const content = (m) => m.image
-      ? [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: m.image.toString('base64') } }, { type: 'text', text: m.content }]
-      : m.content;
+    const content = (m) => m.images.length ? [...m.images.map(anthropicImage), { type: 'text', text: m.content }] : m.content;
     const stream = client.messages.stream({
       model: smart ? ai.smartModel : ai.model,
       max_tokens: 16000,
       system,
-      messages: withImage(messages, imagePng).map((m) => ({ role: m.role, content: content(m) })),
+      messages: withImages(messages, images).map((m) => ({ role: m.role, content: content(m) })),
     });
     if (onDelta) stream.on('text', onDelta);
     const msg = await stream.finalMessage();
@@ -144,15 +149,15 @@ export const providers = {
     return msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   },
 
-  async openai({ ai, system, messages, imagePng, smart, onDelta }) {
+  async openai({ ai, system, messages, images = [], smart, onDelta }) {
     const client = new OpenAI({ apiKey: ai.apiKey || 'none', baseURL: ai.baseUrl || undefined });
-    const content = (m) => m.image
-      ? [{ type: 'text', text: m.content }, { type: 'image_url', image_url: { url: `data:image/png;base64,${m.image.toString('base64')}` } }]
+    const content = (m) => m.images.length
+      ? [{ type: 'text', text: m.content }, ...m.images.map((png) => ({ type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } }))]
       : m.content;
     const stream = await client.chat.completions.create({
       model: smart ? ai.smartModel : ai.model,
       stream: true,
-      messages: [{ role: 'system', content: system }, ...withImage(messages, imagePng).map((m) => ({ role: m.role, content: content(m) }))],
+      messages: [{ role: 'system', content: system }, ...withImages(messages, images).map((m) => ({ role: m.role, content: content(m) }))],
     });
     let text = '';
     for await (const chunk of stream) {
@@ -163,15 +168,15 @@ export const providers = {
   },
 
   // Our own system prompt, no tools/MCP/hooks/plugins: the user's Claude Code setup cost ~5 s per call and leaked into answers.
-  'claude-cli': ({ ai, system, messages, imagePng, smart, onDelta }) =>
-    withTempFile(system, 'txt', async (systemFile) => { // a file, not an argument: the transcript can exceed Windows' command-line limit
+  'claude-cli': ({ ai, system, messages, images = [], smart, onDelta }) =>
+    withTempFiles([system], 'txt', async ([systemFile]) => { // a file, not an argument: the transcript can exceed Windows' command-line limit
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
         '--system-prompt-file', systemFile, '--tools', '', '--strict-mcp-config', '--setting-sources', '',
         '--disable-slash-commands', '--no-session-persistence'];
       const model = smart ? ai.smartModel : ai.model;
       if (/^claude/.test(model)) args.push('--model', model); // a non-Claude name left in settings would make the CLI fail
       const text = dialog(messages);
-      const content = imagePng ? [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagePng.toString('base64') } }, { type: 'text', text }] : text;
+      const content = images.length ? [...images.map(anthropicImage), { type: 'text', text }] : text;
       let buf = '', result = '';
       await run('claude', args, `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`, (chunk) => {
         buf += chunk;
@@ -185,13 +190,13 @@ export const providers = {
       return result.trim();
     }),
 
-  'codex-cli': ({ ai, system, messages, imagePng, smart }) =>
-    withTempFile(imagePng, 'png', async (png) => {
+  'codex-cli': ({ ai, system, messages, images = [], smart }) =>
+    withTempFiles(images, 'png', async (pngs) => {
       const out = path.join(os.tmpdir(), `meetinter-${randomUUID()}.txt`);
       const args = ['exec', '--skip-git-repo-check', '--output-last-message', out];
       const model = smart ? ai.smartModel : ai.model;
       if (model && !/^claude/.test(model)) args.push('-m', model);
-      if (png) args.push('-i', png); // -i takes a list: it must come last, the prompt goes through stdin
+      for (const png of pngs) args.push('-i', png); // -i takes a list: it must come last, the prompt goes through stdin
       try {
         await run('codex', args, flatten({ system, messages }));
         return fs.readFileSync(out, 'utf8').trim();

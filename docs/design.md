@@ -78,11 +78,11 @@ Focusable = `!(invisible && noFocusWhenInvisible)`.
 
 ## IA
 
-`src/main/ai.js` : registre `providers[kind].complete({ system, messages, imagePng?, smart, onDelta })`.
+`src/main/ai.js` : registre `providers[kind].complete({ system, messages, images?, smart, onDelta })`.
 - `anthropic` : SDK, streaming ; smart → `smartModel`.
 - `openai` : SDK avec `baseURL` (OpenAI, Ollama `http://localhost:11434/v1`, LM Studio…), streaming.
 - `claude-cli` : `claude -p` (image écrite en fichier temporaire et référencée), sortie en une fois.
-- `codex-cli` : `codex exec --skip-git-repo-check -i <png> --output-last-message <file> -`, sortie en une fois.
+- `codex-cli` : `codex exec --skip-git-repo-check --output-last-message <file> -i <png>… -`, sortie en une fois.
 
 Construction des prompts = fonctions pures (`buildChatPrompt`, `buildSummaryPrompt`, `buildFollowUpPrompt`) :
 prompt du mode + fichiers de référence + transcript formaté (`[mm:ss] Moi/Eux: …`) + langue de sortie.

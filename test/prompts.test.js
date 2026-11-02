@@ -19,23 +19,30 @@ test('chat prompt carries mode prompt, reference files, transcript, language and
   const m = { ...mode('work'), files: [{ name: 'cv.txt', text: 'Dix ans de Rust' }] };
   const { system, messages } = buildChatPrompt({
     mode: m, transcript, history: [{ role: 'user', text: 'a' }, { role: 'assistant', text: 'b' }],
-    text: 'What should I say next?', outputLanguage: 'fr', hasScreenshot: true,
+    text: 'What should I say next?', outputLanguage: 'fr', screenshots: 1,
   });
   assert.match(system, /I am a candidate interviewing for a position/);
   assert.match(system, /cv\.txt ---\nDix ans de Rust/);
   assert.match(system, /\[00:05\] Eux: Parlez-moi de vous\./);
   assert.match(system, /entire answer in Français/);
-  assert.match(system, /screenshot/);
+  assert.match(system, /A screenshot of the user's screen is attached/);
   assert.match(system, /No em dashes/);
   assert.deepEqual(messages.map((x) => x.role), ['user', 'assistant', 'user']);
   assert.equal(messages.at(-1).content, 'What should I say next?');
 });
 
 test('chat prompt without transcript or screenshot says so', () => {
-  const { system } = buildChatPrompt({ mode: mode('general'), transcript: [], history: [], text: 'x', outputLanguage: 'auto', hasScreenshot: false });
+  const { system } = buildChatPrompt({ mode: mode('general'), transcript: [], history: [], text: 'x', outputLanguage: 'auto', screenshots: 0 });
   assert.match(system, /No conversation has been transcribed yet/);
   assert.doesNotMatch(system, /screenshot/);
   assert.match(system, /language of the conversation/);
+});
+
+test('several screenshots are described as one per second, oldest first, the last one now', () => {
+  const { system } = buildChatPrompt({ mode: mode('general'), transcript: [], history: [], text: 'x', outputLanguage: 'auto', screenshots: 6 });
+  assert.match(system, /6 screenshots of the user's screen/);
+  assert.match(system, /one per second, oldest first/);
+  assert.match(system, /last one is the screen right now/);
 });
 
 test('summary prompt lists every section of the mode with its instruction and asks for a title', () => {

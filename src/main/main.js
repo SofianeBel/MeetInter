@@ -9,6 +9,7 @@ import { complete, transcribe, buildChatPrompt, buildSummaryPrompt, buildFollowU
 import { startCalendar } from './calendar.js';
 import { makeSeekable } from './webm.js';
 import { QUICK_ACTIONS } from '../shared/modes.js';
+import { recentFrames } from '../shared/frames.js';
 
 if (!app.requestSingleInstanceLock()) app.quit();
 protocol.registerSchemesAsPrivileged([{ scheme: 'rec', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
@@ -147,6 +148,8 @@ function sync(state) {
   }
   if (changed('ics', settings.icsUrl)) calendar?.refresh();
   if (changed('tray', [!!state.session, settings.invisible])) buildTray();
+  const history = !!state.session && settings.screenUse === 'required';
+  if (changed('screenHistory', history)) screenHistory(history);
 }
 
 const actions = {
@@ -341,15 +344,35 @@ function addSegment(role, wavBase64, at) {
 
 // ---------- chat ----------
 
-async function captureScreen() {
+async function grabScreen(maxWidth) {
   const disp = screen.getDisplayNearestPoint(wins.chat.getBounds());
+  const full = { width: disp.size.width * disp.scaleFactor, height: disp.size.height * disp.scaleFactor };
+  const k = Math.min(1, maxWidth / full.width);
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: Math.round(full.width * k), height: Math.round(full.height * k) } });
+  return (sources.find((s) => s.display_id === String(disp.id)) ?? sources[0])?.thumbnail.toPNG() ?? null;
+}
+
+// One frame per second during a session, in RAM only, so the AI sees what just changed.
+let frames = [], frameTimer = null, grabbing = false;
+function screenHistory(on) {
+  clearInterval(frameTimer);
+  frames = [];
+  const timer = frameTimer = on ? setInterval(async () => {
+    if (grabbing || store.state.ui.isCapturingScreenshot) return;
+    grabbing = true;
+    const at = Date.now();
+    try {
+      const png = await grabScreen(1280); // no content protection toggle: it would flicker every second
+      if (png && frameTimer === timer) frames = recentFrames([...frames, { at, png }], Date.now());
+    } catch (e) { log('historique écran :', e.message); } finally { grabbing = false; }
+  }, 1000) : null;
+}
+
+async function captureScreen() {
   store.patchUi({ isCapturingScreenshot: true });
   await sleep(150); // let content protection hide our own windows
   try {
-    const full = { width: disp.size.width * disp.scaleFactor, height: disp.size.height * disp.scaleFactor };
-    const k = Math.min(1, 1920 / full.width);
-    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: Math.round(full.width * k), height: Math.round(full.height * k) } });
-    return (sources.find((s) => s.display_id === String(disp.id)) ?? sources[0])?.thumbnail.toPNG() ?? null;
+    return await grabScreen(1920);
   } catch (e) {
     log('capture :', e.message);
     return null;
@@ -364,20 +387,22 @@ async function ask({ text, display, quick } = {}) {
   }
   const live = store.state.session;
   const q = QUICK_ACTIONS[quick ?? (text?.trim() ? '' : 'assist')];
-  const png = settings.screenUse === 'required' ? await captureScreen() : null;
+  const past = recentFrames(frames, Date.now()).map((f) => f.png); // empty when the session just started or screenUse is off
+  const now = settings.screenUse === 'required' ? await captureScreen() : null;
+  const images = now ? [...past, now] : [];
   const prompt = text?.trim() || (q.sessionPrompt && live.transcript.length ? q.sessionPrompt : q.prompt);
   const history = [...live.messages];
-  const user = { id: randomUUID(), role: 'user', text: prompt, display: display ?? text?.trim() ?? q.label, screenshot: !!png };
+  const user = { id: randomUUID(), role: 'user', text: prompt, display: display ?? text?.trim() ?? q.label, screenshot: !!now };
   const reply = { id: randomUUID(), role: 'assistant', text: '' };
   store.addMessages(user, reply);
   store.patchUi({ showChat: true, chatExpanded: true });
 
   const { system, messages } = buildChatPrompt({
     mode: modeOf(live.modeId), transcript: live.transcript, history, text: prompt,
-    outputLanguage: settings.outputLanguage, hasScreenshot: !!png,
+    outputLanguage: settings.outputLanguage, screenshots: images.length,
   });
   complete(settings.ai, {
-    system, messages, imagePng: png, smart: settings.smartMode,
+    system, messages, images, smart: settings.smartMode,
     onDelta: (delta) => send('chat', 'chat-delta', { messageId: reply.id, delta, done: false }),
   }).then((answer) => {
     store.setMessageText(reply.id, answer.trim() || 'Rien à ajouter pour le moment.');
