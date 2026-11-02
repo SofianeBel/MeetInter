@@ -22,7 +22,28 @@ function feed(role, samples) {
   }
 }
 
-async function start() {
+// video of the chosen window + mic and system sound mixed apart from the VAD path, streamed to main in 3 s chunks
+function record(video, streams) {
+  const mix = new AudioContext();
+  const out = mix.createMediaStreamDestination();
+  for (const s of streams) mix.createMediaStreamSource(new MediaStream(s.getAudioTracks())).connect(out);
+  const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'].find((t) => MediaRecorder.isTypeSupported(t));
+  const rec = new MediaRecorder(new MediaStream([video, ...out.stream.getAudioTracks()]), {
+    mimeType, videoBitsPerSecond: 4e6, audioBitsPerSecond: 128e3, videoKeyFrameIntervalDuration: 2000,
+  });
+  let writing = Promise.resolve();
+  rec.onstart = () => { writing = api.videoStart(Date.now()); };
+  rec.ondataavailable = (e) => {
+    writing = writing.then(async () => api.videoChunk(new Uint8Array(await e.data.arrayBuffer()))).catch((err) => console.error('vidéo :', err.message));
+  };
+  rec.onstop = () => { writing.finally(() => api.videoEnd()); mix.close(); video.stop(); };
+  rec.onerror = (e) => console.error('enregistrement vidéo :', e.error?.message);
+  video.onended = () => rec.state !== 'inactive' && rec.stop(); // recorded window closed: the session goes on without video
+  rec.start(3000);
+  return rec;
+}
+
+async function start(withVideo) {
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   const streams = [];
   const tap = (role, stream) => {
@@ -38,13 +59,23 @@ async function start() {
   try { tap('me', await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })); }
   catch (e) { console.error('micro indisponible :', e.message); }
   try {
-    const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    display.getVideoTracks().forEach((t) => t.stop());
-    tap('them', display);
+    const video = withVideo ? { width: { max: 1280 }, height: { max: 720 }, frameRate: { ideal: 60, max: 60 } } : true;
+    const display = await navigator.mediaDevices.getDisplayMedia({ video, audio: true });
+    const [track] = display.getVideoTracks();
+    if (withVideo && capture?.ctx === ctx && track) {
+      display.removeTrack(track);
+      streams.push(new MediaStream([track]));
+      tap('them', display);
+      capture.recorder = record(track, streams.filter((s) => s.getAudioTracks().length));
+    } else {
+      display.getVideoTracks().forEach((t) => t.stop());
+      tap('them', display);
+    }
   } catch (e) { console.error('son système indisponible :', e.message); }
 }
 
 function stop() {
+  if (capture.recorder?.state === 'recording') capture.recorder.stop();
   capture.streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   capture.ctx.close();
   capture = null;
@@ -52,12 +83,13 @@ function stop() {
 }
 
 const onState = (s) => {
-  if (s.session && !capture) start();
+  if (s.session && !capture) start(s.session.recordVideo);
   else if (!s.session && capture) stop();
 };
 
 api.on('audio-flush', () => {
   if (!capture) return;
+  if (capture.recorder?.state === 'recording') capture.recorder.stop();
   for (const r of ['me', 'them']) { const s = seg[r].flush(); if (s) emit(r, s); }
 });
 api.onState(onState);
