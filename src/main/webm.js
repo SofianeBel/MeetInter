@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 
 const ID = {
   EBML: 0x1a45dfa3, Segment: 0x18538067, SeekHead: 0x114d9b74, Seek: 0x4dbb, SeekID: 0x53ab, SeekPosition: 0x53ac,
-  Info: 0x1549a966, Duration: 0x4489, Tracks: 0x1654ae6b, TrackEntry: 0xae, TrackNumber: 0xd7, Cluster: 0x1f43b675,
+  Info: 0x1549a966, Duration: 0x4489, Tracks: 0x1654ae6b, TrackEntry: 0xae, TrackNumber: 0xd7, TrackType: 0x83, Cluster: 0x1f43b675,
   Timecode: 0xe7, SimpleBlock: 0xa3, Cues: 0x1c53bb6b, CuePoint: 0xbb, CueTime: 0xb3, CueTrackPositions: 0xb7,
   CueTrack: 0xf7, CueClusterPosition: 0xf1,
 };
@@ -68,7 +68,7 @@ export async function makeSeekable(file) {
     if (seg?.id !== ID.Segment) throw new Error('pas un fichier WebM');
     const segEnd = Math.min(eof, seg.end ?? eof);
 
-    let info, tracks, duration = 0;
+    let info, tracks, video, duration = 0;
     const clusters = [];
     for (let p = seg.data; p < segEnd;) {
       const e = await header(read, p);
@@ -76,11 +76,18 @@ export async function makeSeekable(file) {
       if (e.id !== ID.Cluster) {
         if (clusters.length || e.end == null || e.end > segEnd) break;
         if (e.id === ID.Info) info = e;
-        if (e.id === ID.Tracks) tracks = e;
+        if (e.id === ID.Tracks) {
+          tracks = e;
+          for await (const t of children(read, e.data, e.end)) {
+            const f = {};
+            if (t.id === ID.TrackEntry) for await (const x of children(read, t.data, t.end)) f[x.id] = uint(await read(x.data, x.size));
+            if (f[ID.TrackType] === 1) video = f[ID.TrackNumber];
+          }
+        }
         p = e.end;
         continue;
       }
-      const c = { pos: p, time: 0 };
+      const c = { pos: p, time: 0, key: null };
       p = e.data;
       // a live cluster has unknown size: it ends at the next top-level element; a truncated tail is dropped
       for (const limit = e.end ?? segEnd; p < limit;) {
@@ -88,40 +95,37 @@ export async function makeSeekable(file) {
         if (!x || x.end == null || x.end > limit || TOP.has(x.id)) break;
         if (x.id === ID.Timecode) c.time = uint(await read(x.data, x.size));
         if (x.id === ID.SimpleBlock) {
-          const b = await read(x.data, 10);
-          duration = Math.max(duration, c.time + b.readInt16BE(vlen(b[0])));
+          const b = await read(x.data, 12), n = vlen(b[0]);
+          const t = c.time + b.readInt16BE(n);
+          duration = Math.max(duration, t);
+          if (c.key == null && b[n + 2] & 0x80 && (b[0] & 0x7f) === video) c.key = t;
         }
         p = x.end;
       }
       clusters.push(c);
       to = p;
     }
-    if (!info || !tracks || !clusters.length) throw new Error('WebM incomplet');
+    if (!info || !tracks || video == null || !clusters.length) throw new Error('WebM incomplet');
     from = clusters[0].pos;
 
     const whole = async (e) => Buffer.from(await read(e.pos, e.end - e.pos));
     const infoKids = [];
     for await (const x of children(read, info.data, info.end)) if (x.id !== ID.Duration) infoKids.push(await whole(x));
-    const trackNums = [];
-    for await (const t of children(read, tracks.data, tracks.end)) {
-      if (t.id !== ID.TrackEntry) continue;
-      for await (const x of children(read, t.data, t.end)) if (x.id === ID.TrackNumber) trackNums.push(uint(await read(x.data, x.size)));
-    }
 
     const infoEl = el(ID.Info, ...infoKids, f64(ID.Duration, duration));
     const tracksEl = await whole(tracks);
     const seek = (id, pos) => el(ID.Seek, el(ID.SeekID, idBytes(id)), u64(ID.SeekPosition, pos));
     const seekLen = el(ID.SeekHead, seek(ID.Info, 0), seek(ID.Tracks, 0), seek(ID.Cues, 0)).length;
     const shift = seekLen + infoEl.length + tracksEl.length - from; // new segment-relative pos = old absolute pos + shift
-    cues = el(ID.Cues, ...clusters.map((c) => el(ID.CuePoint, u64(ID.CueTime, c.time),
-      ...trackNums.map((n) => el(ID.CueTrackPositions, u64(ID.CueTrack, n), u64(ID.CueClusterPosition, c.pos + shift))))));
+    // one cue per cluster holding a video keyframe, at that keyframe: the demuxer skips to it, so decoding starts clean
+    cues = el(ID.Cues, ...clusters.filter((c) => c.key != null).map((c) => el(ID.CuePoint, u64(ID.CueTime, c.key),
+      el(ID.CueTrackPositions, u64(ID.CueTrack, video), u64(ID.CueClusterPosition, c.pos + shift)))));
     const cuesPos = to + shift;
     const body = Buffer.concat([
       el(ID.SeekHead, seek(ID.Info, seekLen), seek(ID.Tracks, seekLen + infoEl.length), seek(ID.Cues, cuesPos)), infoEl, tracksEl,
     ]);
-    const segSize = Buffer.alloc(8);
-    segSize.writeBigUInt64BE(BigInt(cuesPos + cues.length) | (1n << 56n));
-    head = Buffer.concat([await read(0, ebml.end), idBytes(ID.Segment), segSize, body]);
+    // Segment size stays unknown: its live clusters have unknown sizes, which a sized parent forbids
+    head = Buffer.concat([await read(0, ebml.end), idBytes(ID.Segment), Buffer.from('01ffffffffffffff', 'hex'), body]);
   } finally { await fh.close(); }
 
   const tmp = `${file}.tmp`;
