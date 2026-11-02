@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { BUILTIN_MODES, DEFAULT_SHORTCUTS } from '../shared/modes.js';
 
 export const DEFAULT_SETTINGS = {
-  ai: { provider: 'anthropic', model: 'claude-sonnet-5-5', smartModel: 'claude-opus-5-5', apiKey: '', baseUrl: '' },
+  ai: { provider: 'anthropic', model: 'claude-haiku-5-5', smartModel: 'claude-opus-5-5', apiKey: '', baseUrl: '' },
   stt: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'whisper-1', language: 'auto' },
   outputLanguage: 'fr', invisible: true, noFocusWhenInvisible: false, hideChatHidesControl: true,
   screenUse: 'required', smartMode: false, ambient: false, openAtLogin: false, icsUrl: '', activeModeId: 'general',

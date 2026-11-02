@@ -27,7 +27,7 @@ const join = (...parts) => parts.filter(Boolean).join('\n\n');
 
 export function buildChatPrompt({ mode, transcript, history, text, outputLanguage, hasScreenshot }) {
   const system = join(
-    'You are MeetInter, a real-time assistant that helps the user during a live meeting or interview. The user reads your answer while the conversation goes on, so be concise and direct. Use Markdown.',
+    'You are MeetInter, a real-time assistant that helps the user during a live meeting or interview. The user glances at your answer while still talking, so answer like a colleague whispering a quick tip: 1 to 3 short sentences in plain spoken words. No headings, no intro, no recap of the question, no caveats. A short bullet list only when listing is the point. Longer only if the user explicitly asks for detail or code.',
     hasScreenshot && "A screenshot of the user's screen is attached to the last message.",
     mode?.chatPrompt,
     filesBlock(mode),
@@ -94,15 +94,18 @@ export function parseFollowUp(text) {
 
 const withImage = (messages, imagePng) => imagePng ? messages.map((m, i) => i === messages.length - 1 ? { ...m, image: imagePng } : m) : messages;
 
-const flatten = ({ system, messages }) =>
-  `${system}\n\n---\n\n${messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n')}\n\nAnswer the last User message.`;
+const dialog = (messages) =>
+  messages.length === 1 ? messages[0].content
+    : `${messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n')}\n\nAnswer the last User message.`;
 
-function run(cmd, args, input, cwd = os.tmpdir()) {
+const flatten = ({ system, messages }) => `${system}\n\n---\n\n${dialog(messages)}`;
+
+function run(cmd, args, input, onOut) {
   return new Promise((resolve, reject) => {
     const win = process.platform === 'win32';
-    const p = spawn(cmd, win ? args.map((a) => (/\s/.test(a) ? `"${a}"` : a)) : args, { cwd, shell: win, windowsHide: true });
+    const p = spawn(cmd, win ? args.map((a) => (a === '' ? '""' : /\s/.test(a) ? `"${a}"` : a)) : args, { cwd: os.tmpdir(), shell: win, windowsHide: true });
     let out = '', err = '';
-    p.stdout.on('data', (d) => (out += d));
+    p.stdout.on('data', (d) => { out += d; onOut?.(String(d)); });
     p.stderr.on('data', (d) => (err += d));
     p.on('error', reject);
     p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`${cmd} a échoué (${code}) : ${(err || out).trim().slice(-500)}`))));
@@ -110,10 +113,10 @@ function run(cmd, args, input, cwd = os.tmpdir()) {
   });
 }
 
-const withTempPng = async (png, fn) => {
-  if (!png) return fn(null);
-  const file = path.join(os.tmpdir(), `meetinter-${randomUUID()}.png`);
-  fs.writeFileSync(file, png);
+const withTempFile = async (data, ext, fn) => {
+  if (!data) return fn(null);
+  const file = path.join(os.tmpdir(), `meetinter-${randomUUID()}.${ext}`);
+  fs.writeFileSync(file, data);
   try { return await fn(file); } finally { fs.rmSync(file, { force: true }); }
 };
 
@@ -153,21 +156,31 @@ export const providers = {
     return text;
   },
 
-  'claude-cli': ({ ai, system, messages, imagePng, smart }) =>
-    withTempPng(imagePng, async (file) => {
-      let prompt = flatten({ system, messages });
-      const args = ['-p', '--output-format', 'text'];
+  // Our own system prompt, no tools/MCP/hooks/plugins: the user's Claude Code setup cost ~5 s per call and leaked into answers.
+  'claude-cli': ({ ai, system, messages, imagePng, smart, onDelta }) =>
+    withTempFile(system, 'txt', async (systemFile) => { // a file, not an argument: the transcript can exceed Windows' command-line limit
+      const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
+        '--system-prompt-file', systemFile, '--tools', '', '--strict-mcp-config', '--setting-sources', '',
+        '--disable-slash-commands', '--no-session-persistence'];
       const model = smart ? ai.smartModel : ai.model;
       if (/^claude/.test(model)) args.push('--model', model); // a non-Claude name left in settings would make the CLI fail
-      if (file) {
-        prompt += `\n\nThe user's screenshot is the image file ${file}. Read it with the Read tool before answering.`;
-        args.push('--allowedTools', 'Read', '--add-dir', path.dirname(file));
-      }
-      return (await run('claude', args, prompt)).trim();
+      const text = dialog(messages);
+      const content = imagePng ? [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagePng.toString('base64') } }, { type: 'text', text }] : text;
+      let buf = '', result = '';
+      await run('claude', args, `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`, (chunk) => {
+        buf += chunk;
+        for (let i; (i = buf.indexOf('\n')) >= 0; buf = buf.slice(i + 1)) {
+          let e;
+          try { e = JSON.parse(buf.slice(0, i)); } catch { continue; }
+          if (e.type === 'stream_event' && e.event?.delta?.type === 'text_delta') onDelta?.(e.event.delta.text);
+          else if (e.type === 'result') result = e.result ?? '';
+        }
+      });
+      return result.trim();
     }),
 
   'codex-cli': ({ ai, system, messages, imagePng, smart }) =>
-    withTempPng(imagePng, async (png) => {
+    withTempFile(imagePng, 'png', async (png) => {
       const out = path.join(os.tmpdir(), `meetinter-${randomUUID()}.txt`);
       const args = ['exec', '--skip-git-repo-check', '--output-last-message', out];
       const model = smart ? ai.smartModel : ai.model;
