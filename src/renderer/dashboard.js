@@ -1,5 +1,6 @@
 import { marked } from '../../node_modules/marked/lib/marked.esm.js';
 import { LANGUAGES, SHORTCUT_LABELS, DEFAULT_SHORTCUTS } from '../shared/modes.js';
+import { videoTime, segmentAt } from '../shared/recap.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -69,12 +70,13 @@ async function viewSession(id) {
     summary: s.status === 'summarizing' ? '<p class="muted">Génération des notes…</p>'
       : s.status === 'error' ? `<p class="badge err">${esc(s.error ?? 'Erreur')}</p><p class="muted">Vérifie le fournisseur IA dans les réglages puis clique sur Ré-analyser.</p>`
       : `<div class="md selectable">${s.summary ? md(s.summary) : '<p class="muted">Aucun résumé (pas de parole transcrite).</p>'}</div>`,
-    transcript: `<pre class="tr">${esc(transcriptText(s)) || 'Transcript vide.'}</pre>`,
+    transcript: s.video ? recapHtml(s) : `<pre class="tr">${esc(transcriptText(s)) || 'Transcript vide.'}</pre>`,
     notes: `<textarea id="notes" class="big" style="width:100%" placeholder="Tes notes personnelles…">${esc(s.notes)}</textarea>`,
     email: `<div id="email">${s.followUpEmail ? emailHtml(s.followUpEmail) : '<button id="gen" class="primary">Générer l’e-mail de suivi</button>'}</div>`,
     ask: `<form id="askForm" class="bar"><input id="aq" placeholder="Poser une question sur cette réunion…"><button class="primary">Demander</button></form><div id="aa" class="md selectable"></div>`,
   };
   const labels = { summary: 'Résumé', transcript: 'Transcript', notes: 'Notes', email: 'E-mail de suivi', ask: 'Poser une question' };
+  const old = $('#vid'), keep = old?.dataset.id === id && { t: old.currentTime, playing: !old.paused };
   main.innerHTML = `<input class="title-in" id="title" value="${esc(s.title)}">
     <div class="muted">${fmtDate(s.startedAt)} · ${mmss((s.endedAt ?? s.startedAt) - s.startedAt)} · ${esc(mode?.name ?? 'Mode supprimé')} ${badge(s.status)}</div>
     <div class="tabs">${Object.entries(labels).map(([k, v]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${v}</button>`).join('')}</div>
@@ -88,7 +90,16 @@ async function viewSession(id) {
   $('#cpSummary').onclick = () => api.copy(s.summary ?? '');
   $('#cpTranscript').onclick = () => api.copy(transcriptText(s));
   $('#again').onclick = () => api.reanalyze(id);
-  $('#del').onclick = async () => { if (confirm('Supprimer cette session définitivement ?')) { await api.deleteSession(id); location.hash = '#/sessions'; } };
+  $('#del').onclick = async () => {
+    if (!confirm('Supprimer cette session définitivement ?')) return;
+    $('#vid')?.removeAttribute('src'); // release the file before it is deleted
+    $('#vid')?.load();
+    await api.deleteSession(id);
+    location.hash = '#/sessions';
+  };
+  if ($('#vid')) wireRecap(s);
+  // a re-render of the same session (summary landing, title edit) must not reset playback
+  if (keep && $('#vid')) $('#vid').addEventListener('loadedmetadata', (e) => { e.target.currentTime = keep.t; if (keep.playing) e.target.play(); }, { once: true });
   if ($('#notes')) $('#notes').onchange = (e) => api.updateSession(id, { notes: e.target.value });
   if ($('#gen')) $('#gen').onclick = async () => {
     $('#email').textContent = 'Rédaction…';
@@ -104,6 +115,30 @@ async function viewSession(id) {
 }
 
 const transcriptText = (s) => s.transcript.filter((t) => t.text).map((t) => `[${mmss(t.relativeMs)}] ${t.role === 'me' ? 'Moi' : 'Eux'} : ${t.text}`).join('\n');
+const spoken = (s) => s.transcript.filter((t) => t.text);
+const recapHtml = (s) => `<div class="recap"><video id="vid" data-id="${s.id}" controls preload="metadata" src="rec://v/${encodeURIComponent(s.video.file)}"></video>
+  <div id="lines" class="lines selectable">${spoken(s).map((t, i) => `<button class="line" data-i="${i}"><span class="muted">${mmss(videoTime(t, s.video.offsetMs))}</span>
+    <span><b class="${t.role}">${t.role === 'me' ? 'Moi' : 'Eux'}</b> ${esc(t.text)}</span></button>`).join('') || '<p class="muted">Transcript vide.</p>'}</div></div>`;
+function wireRecap(s) {
+  const vid = $('#vid'), box = $('#lines'), lines = spoken(s), rows = $$('.line');
+  let current = -1;
+  box.onclick = (e) => {
+    const b = e.target.closest('.line');
+    if (!b) return;
+    vid.currentTime = videoTime(lines[b.dataset.i], s.video.offsetMs) / 1000;
+    vid.play();
+  };
+  vid.ontimeupdate = () => {
+    const i = segmentAt(lines, s.video.offsetMs, vid.currentTime * 1000);
+    if (i === current) return;
+    rows[current]?.classList.remove('on');
+    rows[i]?.classList.add('on');
+    current = i;
+    const r = rows[i];
+    // scroll the list only, scrollIntoView would also move the page and push the player out of view
+    if (r && (r.offsetTop < box.scrollTop || r.offsetTop + r.offsetHeight > box.scrollTop + box.clientHeight)) box.scrollTop = r.offsetTop - 8;
+  };
+}
 const emailHtml = (m) => `<div class="f"><span>Objet</span><input id="subj" value="${esc(m.subject)}"></div>
   <textarea id="body" class="big" style="width:100%;min-height:200px">${esc(m.body)}</textarea>
   <div class="actions" style="margin-top:8px"><button id="mailto" class="primary">Ouvrir dans la messagerie</button><button id="cpMail">Copier</button></div>`;
@@ -218,6 +253,7 @@ function viewSettings() {
     ${row('Masquer cache aussi la pilule', check('hideChatHidesControl'))}
     ${row('Utiliser l’écran', select('screenUse', [['required', 'Joindre une capture à chaque question'], ['off', 'Jamais']]))}
     ${row('Mode ambiant (chat sans session démarrée)', check('ambient'))}
+    ${row('Enregistrer la vidéo (fenêtre choisie au démarrage)', check('recordVideo'))}
     ${row('Lancer au démarrage de Windows', check('openAtLogin'))}
     <h3>Calendrier</h3>
     ${row('Adresse iCal secrète (.ics)', input('icsUrl', 'text', 'placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"'))}

@@ -1,19 +1,23 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, screen, desktopCapturer, session, shell, clipboard, dialog } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, screen, desktopCapturer, session, shell, clipboard, dialog, protocol } from 'electron';
 import { createStore, scoreSession, advance } from './state.js';
 import { complete, transcribe, buildChatPrompt, buildSummaryPrompt, buildFollowUpPrompt, buildAskPrompt, splitTitle, parseFollowUp } from './ai.js';
 import { startCalendar } from './calendar.js';
+import { makeSeekable } from './webm.js';
 import { QUICK_ACTIONS } from '../shared/modes.js';
 
 if (!app.requestSingleInstanceLock()) app.quit();
+protocol.registerSchemesAsPrivileged([{ scheme: 'rec', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
 
 const ROOT = path.join(import.meta.dirname, '..');
 const page = (name) => path.join(ROOT, 'renderer', `${name}.html`);
 const CONTROL = { w: 236, h: 34 }; // expanded notch + its two 10px shoulders
 const CHAT_W = 540;
+const PICKER = { w: 720, h: 480 };
 
 let store, tray, calendar;
 let quitting = false;
@@ -22,6 +26,9 @@ const wins = {};
 const controlPos = { x: 0, y: 0 };
 let chatHeight = 152;
 const inflight = new Set();
+let videoSource = null; // { id, name } of the window filmed during the live session
+let recording = null; // { file, name, offsetMs, ended: Promise, end() }
+let picking = null, pickerDone = null;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const send = (name, channel, payload) => { if (wins[name] && !wins[name].isDestroyed()) wins[name].webContents.send(channel, payload); };
@@ -197,13 +204,52 @@ function buildTray() {
   ]));
 }
 
+// ---------- window picker ----------
+
+function pickWindow() {
+  return new Promise((resolve) => {
+    const win = overlay('picker', PICKER.w, PICKER.h);
+    const wa = screen.getPrimaryDisplay().workArea;
+    win.setPosition(Math.round(wa.x + (wa.width - PICKER.w) / 2), Math.round(wa.y + (wa.height - PICKER.h) / 2));
+    win.setContentProtection(store.state.settings.invisible);
+    win.webContents.once('did-finish-load', () => reveal(win));
+    pickerDone = (source) => {
+      pickerDone = null;
+      delete wins.picker;
+      if (!win.isDestroyed()) win.destroy();
+      resolve(source);
+    };
+    win.on('closed', () => pickerDone?.(null));
+  });
+}
+
 // ---------- session lifecycle ----------
 
-function startSession() {
+function beginSession(source = null) {
   if (store.state.session) return store.state.session;
-  const s = store.startSession();
+  videoSource = source;
+  const s = store.startSession(!!source);
   store.patchUi({ showChat: true });
   return s;
+}
+
+// with recordVideo on, ask which window to film first; cancelling still starts the session, without video
+async function startSession() {
+  if (store.state.session) return;
+  if (!store.state.settings.recordVideo) return beginSession();
+  picking ??= pickWindow().finally(() => { picking = null; });
+  beginSession(await picking);
+}
+
+const recordingsDir = () => path.join(app.getPath('userData'), 'recordings');
+
+async function finishVideo() {
+  const r = recording;
+  recording = null;
+  if (!r) return null;
+  if (!fs.existsSync(r.file) || !fs.statSync(r.file).size) { fs.rmSync(r.file, { force: true }); return null; }
+  try { await makeSeekable(r.file); } catch (e) { log('vidéo non finalisée :', e.message); } // still playable, only seeking suffers
+  return { file: r.name, offsetMs: r.offsetMs };
 }
 
 const defaultTitle = (ms) => `Réunion du ${new Date(ms).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
@@ -215,11 +261,12 @@ async function endSession() {
   try {
     send('audio', 'audio-flush');
     await sleep(500);
-    await Promise.race([Promise.allSettled([...inflight]), sleep(30000)]);
-    const live = store.takeSession();
-    if (!live.transcript.length && !live.messages.length) return;
+    await Promise.race([Promise.allSettled([...inflight, recording?.ended]), sleep(30000)]);
+    const { recordVideo, ...live } = store.takeSession();
+    const video = await finishVideo();
+    if (!live.transcript.length && !live.messages.length && !video) return;
     const saved = {
-      ...live, endedAt: Date.now(), title: defaultTitle(live.startedAt), notes: '', summary: null, followUpEmail: null,
+      ...live, video, endedAt: Date.now(), title: defaultTitle(live.startedAt), notes: '', summary: null, followUpEmail: null,
       status: advance('live', 'summarizing'),
     };
     store.saveSession(saved);
@@ -313,7 +360,7 @@ async function ask({ text, display, quick } = {}) {
   const { settings } = store.state;
   if (!store.state.session) {
     if (!settings.ambient) throw new Error('Aucune session en cours. Démarre l’écoute ou active le mode ambiant.');
-    startSession();
+    beginSession();
   }
   const live = store.state.session;
   const q = QUICK_ACTIONS[quick ?? (text?.trim() ? '' : 'assist')];
@@ -373,6 +420,31 @@ const handlers = {
   notchHover: (on) => wins.control.setIgnoreMouseEvents(!on, { forward: true }),
   resizeChat: (h) => { chatHeight = Math.max(100, Math.round(h)); placeChat(); },
   addSegment,
+  async pickerSources() {
+    const own = new Set(Object.values(wins).filter((w) => !w.isDestroyed()).map((w) => w.getMediaSourceId()));
+    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 320, height: 180 } });
+    return sources.filter((s) => !own.has(s.id)).map((s) => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL() }));
+  },
+  pickerChoose: (source) => pickerDone?.(source ? { id: String(source.id), name: String(source.name) } : null),
+  videoStart(at) {
+    const live = store.state.session;
+    if (!live?.recordVideo || recording) return;
+    fs.mkdirSync(recordingsDir(), { recursive: true });
+    const name = `${live.id}.webm`;
+    let end;
+    const ended = new Promise((r) => { end = r; });
+    recording = { file: path.join(recordingsDir(), name), name, offsetMs: at - live.startedAt, ended, end };
+    fs.writeFileSync(recording.file, '');
+  },
+  videoChunk(bytes) {
+    if (!recording || recording.failed) return;
+    try { fs.appendFileSync(recording.file, bytes); } catch (e) {
+      recording.failed = true;
+      log('vidéo :', e.message);
+      notice(`Enregistrement vidéo interrompu : ${e.message}`);
+    }
+  },
+  videoEnd: () => recording?.end(),
   openDashboard: (hash) => openDashboard(hash),
   openExternal: (url) => { if (/^(https?|mailto):/i.test(url)) shell.openExternal(url); },
   copy: (text) => clipboard.writeText(String(text)),
@@ -436,8 +508,19 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(true)); // only our own local pages load here
   session.defaultSession.setPermissionCheckHandler(() => true);
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, cb) => {
-    const [screen0] = await desktopCapturer.getSources({ types: ['screen'] });
-    cb({ video: screen0, audio: 'loopback' });
+    cb({ video: videoSource ?? (await desktopCapturer.getSources({ types: ['screen'] }))[0], audio: 'loopback' });
+  });
+  protocol.handle('rec', (req) => {
+    const file = path.join(recordingsDir(), path.basename(decodeURIComponent(new URL(req.url).pathname)));
+    let size;
+    try { size = fs.statSync(file).size; } catch { return new Response(null, { status: 404 }); }
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') ?? '');
+    const start = !m ? 0 : m[1] ? +m[1] : Math.max(0, size - +m[2]);
+    const end = m?.[1] && m[2] ? Math.min(+m[2], size - 1) : size - 1;
+    if (start > end) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+    const headers = { 'Content-Type': 'video/webm', 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1) };
+    if (m) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+    return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })), { status: m ? 206 : 200, headers });
   });
 
   for (const [name, fn] of Object.entries(handlers)) ipcMain.handle(name, (_e, ...args) => fn(...args));
