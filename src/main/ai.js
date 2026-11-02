@@ -25,6 +25,9 @@ const filesBlock = (mode) =>
 
 const join = (...parts) => parts.filter(Boolean).join('\n\n');
 
+// Condensed rules of the unslop skill, so answers don't read as AI-written.
+const STYLE = 'Write like a person, not a chatbot. Plain words, active voice, one idea per sentence. No em dashes, no filler ("it is important to note", "in order to"), no hedging, no "not just X but Y", no forced lists of three, no AI words (delve, crucial, pivotal, showcase, leverage, enhance, additionally). No "Great question", "Certainly", "I hope this helps". No emojis, no bold for emphasis. Give the concrete fact, name or number instead of a vague claim.';
+
 export function buildChatPrompt({ mode, transcript, history, text, outputLanguage, hasScreenshot }) {
   const system = join(
     'You are MeetInter, a real-time assistant that helps the user during a live meeting or interview. The user glances at your answer while still talking, so answer like a colleague whispering a quick tip: 1 to 3 short sentences in plain spoken words. No headings, no intro, no recap of the question, no caveats. A short bullet list only when listing is the point. Longer only if the user explicitly asks for detail or code.',
@@ -34,6 +37,7 @@ export function buildChatPrompt({ mode, transcript, history, text, outputLanguag
     transcript.length
       ? `Live transcript so far ("Moi" is the user, "Eux" is everybody else):\n${formatTranscript(transcript)}`
       : 'No conversation has been transcribed yet.',
+    STYLE,
     languageLine(outputLanguage),
   );
   return { system, messages: [...history.map((m) => ({ role: m.role, content: m.text })), { role: 'user', content: text }] };
@@ -44,6 +48,7 @@ export function buildSummaryPrompt({ mode, session, outputLanguage }) {
   const system = join(
     'You write meeting notes from a transcript. "Moi" is the user the notes are written for, "Eux" is everybody else.',
     filesBlock(mode),
+    STYLE,
     languageLine(outputLanguage),
   );
   const user = join(
@@ -55,7 +60,7 @@ export function buildSummaryPrompt({ mode, session, outputLanguage }) {
 }
 
 export function buildFollowUpPrompt({ session, outputLanguage }) {
-  const system = join('You write follow-up emails after meetings, on behalf of the user ("Moi").', languageLine(outputLanguage));
+  const system = join('You write follow-up emails after meetings, on behalf of the user ("Moi").', STYLE, languageLine(outputLanguage));
   const user = join(
     session.summary && `Meeting notes:\n${session.summary}`,
     `Transcript:\n${formatTranscript(session.transcript)}`,
@@ -71,6 +76,7 @@ export function buildAskPrompt({ sessions, question, outputLanguage }) {
   const system = join(
     'You answer questions about the user\'s past meetings using only the material below. If the answer is not in it, say so.',
     docs.join('\n\n') || 'No meeting available.',
+    STYLE,
     languageLine(outputLanguage),
   );
   return { system, messages: [{ role: 'user', content: question }] };
