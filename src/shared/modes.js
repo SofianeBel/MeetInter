@@ -89,13 +89,11 @@ export const LANGUAGES = [
 
 export const DEFAULT_SHORTCUTS = {
   toggleVisibility: 'Ctrl+\\', ask: 'Ctrl+Enter', clear: 'Ctrl+R', toggleSession: 'Ctrl+Alt+\\', // Electron cannot register Ctrl+Shift+\ on Windows (Cluely's default)
-  moveUp: 'Ctrl+Up', moveDown: 'Ctrl+Down', moveLeft: 'Ctrl+Left', moveRight: 'Ctrl+Right',
   scrollUp: 'Ctrl+Shift+Up', scrollDown: 'Ctrl+Shift+Down',
 };
 
 export const SHORTCUT_LABELS = {
   toggleVisibility: 'Afficher / masquer', ask: 'Demander / Assister', clear: 'Effacer et replier',
-  toggleSession: 'Démarrer / arrêter la session', moveUp: 'Déplacer vers le haut', moveDown: 'Déplacer vers le bas',
-  moveLeft: 'Déplacer vers la gauche', moveRight: 'Déplacer vers la droite',
+  toggleSession: 'Démarrer / arrêter la session',
   scrollUp: 'Défiler la réponse vers le haut', scrollDown: 'Défiler la réponse vers le bas',
 };
